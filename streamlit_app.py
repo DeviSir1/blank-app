@@ -1,89 +1,68 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, timedelta
-import os
 
-st.set_page_config(page_title="Eliott Tracker", page_icon="🍼")
+st.set_page_config(page_title="Eliott App", page_icon="🍼")
 
-st.title("🍼 Suivi d'Eliott")
+# Connexion au Google Sheet (la base de données de l'app)
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-DATA_FILE = "suivi_eliott.csv"
-COLUMNS = ["Date", "Heure", "Type", "Quantité (ml)", "Poids (kg)", "Taille (cm)", "Notes", "Par"]
+st.title("🍼 Eliott Tracker")
 
-# --- GESTION DU FICHIER (NETTOYAGE) ---
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        df = pd.DataFrame(columns=COLUMNS)
-        df.to_csv(DATA_FILE, index=False)
-        return df
-    
-    df = pd.read_csv(DATA_FILE)
-    
-    # Si le fichier est corrompu ou mal colonné (ton cas actuel)
-    if list(df.columns) != COLUMNS:
-        st.warning("Mise à jour du format des données en cours...")
-        # On recrée un dataframe propre avec les anciennes données si possible
-        new_df = pd.DataFrame(columns=COLUMNS)
-        df.to_csv(DATA_FILE, index=False) # On repart sur du propre
-        return new_df
-    return df
+# Lecture des données existantes
+df = conn.read(ttl=0) # ttl=0 pour forcer la mise à jour immédiate
 
-df_display = load_data()
-
-# --- FORMULAIRE ---
-with st.expander("➕ Enregistrer un événement", expanded=True):
-    with st.form("entry_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        date_ev = col1.date_input("Date", datetime.now())
-        heure_ev = col2.time_input("Heure", datetime.now())
+# --- FORMULAIRE D'ENREGISTREMENT ---
+with st.expander("➕ Noter un événement", expanded=True):
+    with st.form("main_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        date_ev = c1.date_input("Date", datetime.now())
+        heure_ev = c2.time_input("Heure", datetime.now())
         
-        type_event = st.selectbox("Type", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"])
+        type_ev = st.selectbox("Type", ["Biberon", "Pipi", "Caca", "Poids/Taille"])
         
-        quantite, poids, taille = 0, 0.0, 0.0
-        if type_event == "Biberon":
-            quantite = st.number_input("Quantité (ml)", min_value=0, step=10, value=150)
-        elif type_event == "Poids/Taille":
-            poids = st.number_input("Poids (kg)", min_value=0.0, step=0.01, format="%.2f")
-            taille = st.number_input("Taille (cm)", min_value=0.0, step=0.5)
+        valeur = 0
+        if type_ev == "Biberon":
+            valeur = st.number_input("Quantité (ml)", step=10, value=150)
+        elif type_ev == "Poids/Taille":
+            valeur = st.number_input("Poids (kg)", step=0.01, format="%.2f")
+
+        note = st.text_input("Note particulière")
+        auteur = st.radio("Qui ?", ["Papa", "Maman"], horizontal=True)
         
-        note = st.text_input("Commentaire / Note")
-        auteur = st.radio("Qui note ?", ["Papa", "Maman"], horizontal=True)
-        
-        if st.form_submit_button("Enregistrer"):
-            new_entry = [date_ev.strftime("%d/%m/%Y"), heure_ev.strftime("%H:%M"), type_event, quantite, poids, taille, note, auteur]
-            pd.DataFrame([new_entry], columns=COLUMNS).to_csv(DATA_FILE, mode='a', header=False, index=False)
+        if st.form_submit_button("Valider"):
+            # Préparation de la nouvelle ligne
+            new_row = pd.DataFrame([{
+                "Date": date_ev.strftime("%d/%m/%Y"),
+                "Heure": heure_ev.strftime("%H:%M"),
+                "Type": type_ev,
+                "Quantite": valeur,
+                "Notes": note,
+                "Par": auteur
+            }])
+            
+            # Ajout au tableau existant et mise à jour du Cloud
+            updated_df = pd.concat([df, new_row], ignore_index=True)
+            conn.update(data=updated_df)
+            st.success("C'est enregistré !")
             st.rerun()
 
-# --- CALCULS ET AFFICHAGE ---
-if not df_display.empty:
-    # On s'assure que les chiffres sont des chiffres
-    df_display['Quantité (ml)'] = pd.to_numeric(df_display['Quantité (ml)'], errors='coerce').fillna(0)
-    
-    # 1. Total du jour (Mise à jour automatique)
+# --- AFFICHAGE DES SCORES ---
+if not df.empty:
     today = datetime.now().strftime("%d/%m/%Y")
-    total_today = df_display[(df_display['Date'] == today) & (df_display['Type'] == "Biberon")]['Quantité (ml)'].sum()
+    # Calcul du total bu AUJOURD'HUI
+    total_lait = df[(df['Date'] == today) & (df['Type'] == "Biberon")]['Quantite'].astype(float).sum()
     
-    c1, c2 = st.columns(2)
-    c1.metric("Total Bib (Auj.)", f"{int(total_today)} ml")
+    col_a, col_b = st.columns(2)
+    col_a.metric("Bu aujourd'hui", f"{int(total_lait)} ml")
     
-    # 2. Dernier Poids
-    poids_data = df_display[df_display['Poids (kg)'] > 0]
-    if not poids_data.empty:
-        c2.metric("Dernier Poids", f"{poids_data.iloc[-1]['Poids (kg)']} kg")
-
-    # 3. Rappel +4h (Sécurisé contre les erreurs de format d'heure)
-    bibs = df_display[df_display['Type'] == "Biberon"]
+    # Rappel +4h
+    bibs = df[df['Type'] == "Biberon"]
     if not bibs.empty:
-        try:
-            last_h = str(bibs.iloc[-1]['Heure'])
-            if ":" in last_h:
-                t_obj = datetime.strptime(last_h, "%H:%M")
-                rappel = (t_obj + timedelta(hours=4)).strftime("%H:%M")
-                st.info(f"🔔 Prochain bib vers **{rappel}**")
-        except:
-            st.info("🔔 Enregistrez un nouveau biberon pour activer le rappel.")
+        last_h = datetime.strptime(bibs.iloc[-1]['Heure'], "%H:%M")
+        next_h = (last_h + timedelta(hours=4)).strftime("%H:%M")
+        st.info(f"🔔 Prochain bib à prévoir vers **{next_h}**")
 
-    st.subheader("📊 Historique")
-    st.dataframe(df_display.tail(10), use_container_width=True)
-else:
-    st.info("L'historique est vide. Enregistrez le premier biberon d'Eliott !")
+    st.subheader("📊 Historique partagé")
+    st.dataframe(df.tail(10), use_container_width=True)
