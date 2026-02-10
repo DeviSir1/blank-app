@@ -2,15 +2,16 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import sqlite3
+import os
 
-# Configuration de la page
+# Config de la page
 st.set_page_config(page_title="Eliott App", page_icon="🍼")
 
-# --- INITIALISATION DE LA BASE (VERSION PROPRE) ---
+# --- INITIALISATION BDD SÉCURISÉE ---
 def init_db():
     conn = sqlite3.connect('eliott_data.db', check_same_thread=False)
     c = conn.cursor()
-    # Création de la table avec toutes les colonnes nécessaires dès le départ
+    # Création propre de la table
     c.execute('''CREATE TABLE IF NOT EXISTS suivi 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   date TEXT, heure TEXT, type TEXT, 
@@ -21,17 +22,17 @@ def init_db():
 
 conn = init_db()
 
-# --- MESSAGE ANNIVERSAIRE SAMUEL (POUR DEMAIN !) ---
+# --- ANNIVERSAIRE SAMUEL (DEMAIN 11/02) ---
 if datetime.now().strftime("%d/%m") == "11/02":
     st.balloons()
     st.success("🎉 **JOYEUX ANNIVERSAIRE SAMUEL !** 🎂 (4 ans aujourd'hui !)")
 
 st.title("🍼 Suivi d'Eliott")
 
-# --- FORMULAIRE DYNAMIQUE ---
+# --- FORMULAIRE DYNAMIQUE (VRAIMENT RÉACTIF) ---
 with st.expander("➕ Noter un événement", expanded=True):
-    # Choix du type en dehors du formulaire pour la réactivité
-    type_ev = st.selectbox("Type d'événement", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"])
+    # On utilise une clé pour forcer le rafraîchissement
+    type_ev = st.selectbox("Type d'événement", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"], key="main_type")
     
     with st.form("form_saisie", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -40,7 +41,7 @@ with st.expander("➕ Noter un événement", expanded=True):
         
         q, p, ta = 0.0, 0.0, 0.0
         
-        # Les champs n'apparaissent QUE si nécessaire
+        # Affichage conditionnel strict
         if type_ev == "Biberon":
             q = st.number_input("Quantité de lait (ml)", min_value=0.0, step=10.0, value=150.0)
         elif type_ev == "Poids/Taille":
@@ -59,55 +60,56 @@ with st.expander("➕ Noter un événement", expanded=True):
             st.rerun()
 
 # --- RÉCUPÉRATION ET AFFICHAGE ---
-df = pd.read_sql_query("SELECT * FROM suivi", conn)
+try:
+    df = pd.read_sql_query("SELECT * FROM suivi", conn)
+except:
+    df = pd.DataFrame()
 
 if not df.empty:
     today = datetime.now().strftime("%d/%m/%Y")
     total_today = df[(df['date'] == today) & (df['type'] == "Biberon")]['quantite'].sum()
     
-    # État du jour
     st.subheader(f"📊 État du jour : {int(total_today)} ml")
     st.progress(min(total_today / 900.0, 1.0))
     
-    # Rappel +4h sécurisé
+    # Prochain bib
     bibs = df[df['type'] == "Biberon"]
     if not bibs.empty:
         try:
             last_h = datetime.strptime(str(bibs.iloc[-1]['heure']), "%H:%M")
             next_h = (last_h + timedelta(hours=4)).strftime("%H:%M")
-            st.warning(f"🔔 Prochain bib prévu à : **{next_h}**")
-        except: pass
+            st.warning(f"🔔 Prochain bib prévu vers : **{next_h}**")
+        except:
+            st.warning("🔔 Prochain bib : Heure à définir")
 
     st.subheader("📝 Historique")
-    st.dataframe(df.iloc[::-1].head(10)[['date', 'heure', 'type', 'quantite', 'note', 'auteur']], use_container_width=True)
+    # On ne montre que les colonnes qui parlent à l'utilisateur
+    cols_to_show = ['date', 'heure', 'type', 'quantite', 'note', 'auteur']
+    st.dataframe(df.iloc[::-1].head(10)[cols_to_show], use_container_width=True)
 
-    # --- MODIFICATION / SUPPRESSION ---
-    with st.expander("✏️ Modifier ou Supprimer une ligne"):
+    # --- MODIF / SUPPR ---
+    with st.expander("✏️ Modifier ou Supprimer"):
         df_edit = df.copy()
         df_edit['label'] = df_edit['date'] + " " + df_edit['heure'] + " - " + df_edit['type']
         
-        choice = st.selectbox("Ligne à modifier", options=df_edit['id'].tolist(), 
+        choice = st.selectbox("Sélectionner la ligne", options=df_edit['id'].tolist(), 
                               format_func=lambda x: df_edit[df_edit['id'] == x]['label'].values[0])
         
         row = df[df['id'] == choice].iloc[0]
-        
         with st.form("edit_form"):
-            edit_note = st.text_input("Note", value=row['note'])
-            edit_q = row['quantite']
-            if row['type'] == "Biberon":
-                edit_q = st.number_input("Quantité (ml)", value=float(row['quantite']), step=10.0)
+            new_n = st.text_input("Note", value=row['note'])
+            new_q = st.number_input("Quantité", value=float(row['quantite'])) if row['type']=="Biberon" else row['quantite']
             
             c1, c2 = st.columns(2)
             if c1.form_submit_button("✅ Valider"):
                 c = conn.cursor()
-                c.execute("UPDATE suivi SET note = ?, quantite = ? WHERE id = ?", (edit_note, edit_q, choice))
+                c.execute("UPDATE suivi SET note=?, quantite=? WHERE id=?", (new_n, new_q, choice))
                 conn.commit()
                 st.rerun()
-                
             if c2.form_submit_button("🗑️ Supprimer"):
                 c = conn.cursor()
-                c.execute("DELETE FROM suivi WHERE id = ?", (choice,))
+                c.execute("DELETE FROM suivi WHERE id=?", (choice,))
                 conn.commit()
                 st.rerun()
 else:
-    st.info("Aucune donnée enregistrée pour le moment.")
+    st.info("L'historique est vide. Enregistrez le premier biberon d'Eliott !")
