@@ -3,29 +3,39 @@ import pandas as pd
 from datetime import datetime, timedelta
 import sqlite3
 
-# Configuration
+# Config
 st.set_page_config(page_title="Eliott App", page_icon="🍼")
 
-# --- BASE DE DONNÉES ---
+# --- BASE DE DONNÉES (CORRIGÉE) ---
 def init_db():
     conn = sqlite3.connect('eliott_data.db', check_same_thread=False)
     c = conn.cursor()
+    # On crée la table avec ID si elle n'existe pas
     c.execute('''CREATE TABLE IF NOT EXISTS suivi 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, heure TEXT, type TEXT, quantite REAL, poids REAL, taille REAL, note TEXT, auteur TEXT)''')
+    
+    # Sécurité : on vérifie si la colonne 'id' existe déjà (pour les anciennes versions)
+    try:
+        c.execute("SELECT id FROM suivi LIMIT 1")
+    except sqlite3.OperationalError:
+        # Si 'id' n'existe pas, on recrée proprement
+        st.warning("Mise à jour de la base de données...")
+        c.execute("ALTER TABLE suivi ADD COLUMN id INTEGER PRIMARY KEY AUTOINCREMENT")
+    
     conn.commit()
     return conn
 
 conn = init_db()
 
-# --- CADEAU POUR DEMAIN (11 FÉVRIER) ---
+# --- ANNIVERSAIRE SAMUEL (DEMAIN !) ---
 if datetime.now().strftime("%d/%m") == "11/02":
     st.balloons()
     st.success("🎉 **JOYEUX ANNIVERSAIRE SAMUEL !** 🎂 (4 ans aujourd'hui !)")
 
 st.title("🍼 Suivi d'Eliott")
 
-# --- FORMULAIRE D'AJOUT ---
-with st.expander("➕ Noter un nouvel événement", expanded=True):
+# --- FORMULAIRE D'AJOUT DYNAMIQUE ---
+with st.expander("➕ Noter un événement", expanded=True):
     type_ev = st.selectbox("Type d'événement", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"])
     
     with st.form("form_saisie", clear_on_submit=True):
@@ -51,7 +61,7 @@ with st.expander("➕ Noter un nouvel événement", expanded=True):
             conn.commit()
             st.rerun()
 
-# --- RÉCUPÉRATION DES DONNÉES ---
+# --- LECTURE DES DONNÉES ---
 df = pd.read_sql_query("SELECT * FROM suivi", conn)
 
 if not df.empty:
@@ -61,41 +71,46 @@ if not df.empty:
     st.subheader(f"📊 État du jour : {int(total_today)} ml")
     st.progress(min(total_today / 900.0, 1.0))
     
-    # Historique
+    # Rappel +4h sécurisé
+    bibs = df[df['type'] == "Biberon"]
+    if not bibs.empty:
+        try:
+            last_h = datetime.strptime(str(bibs.iloc[-1]['heure']), "%H:%M")
+            next_h = (last_h + timedelta(hours=4)).strftime("%H:%M")
+            st.warning(f"🔔 Prochain bib prévu à : **{next_h}**")
+        except: pass
+
     st.subheader("📝 Historique")
     st.dataframe(df.iloc[::-1].head(10)[['date', 'heure', 'type', 'quantite', 'note', 'auteur']], use_container_width=True)
 
-    # --- SECTION MODIFICATION ---
+    # --- ÉDITION / SUPPRESSION ---
     with st.expander("✏️ Modifier ou Supprimer une ligne"):
-        # On crée une liste d'options lisibles pour le sélecteur
-        df_edit = df.iloc[::-1].copy()
+        # On prépare la liste pour le choix
+        df_edit = df.copy()
         df_edit['label'] = df_edit['date'] + " " + df_edit['heure'] + " - " + df_edit['type']
         
-        option = st.selectbox("Choisir la ligne à modifier", options=df_edit['id'].tolist(), 
+        choice = st.selectbox("Ligne à modifier", options=df_edit['id'].tolist(), 
                               format_func=lambda x: df_edit[df_edit['id'] == x]['label'].values[0])
         
-        row_to_edit = df[df['id'] == option].iloc[0]
+        row = df[df['id'] == choice].iloc[0]
         
-        with st.form("form_edit"):
-            new_note = st.text_input("Nouvelle note", value=row_to_edit['note'])
-            new_q = row_to_edit['quantite']
+        with st.form("edit_form"):
+            edit_note = st.text_input("Note", value=row['note'])
+            edit_q = row['quantite']
+            if row['type'] == "Biberon":
+                edit_q = st.number_input("Quantité (ml)", value=float(row['quantite']), step=10.0)
             
-            if row_to_edit['type'] == "Biberon":
-                new_q = st.number_input("Corriger Quantité (ml)", value=float(row_to_edit['quantite']), step=10.0)
-            
-            col_btn1, col_btn2 = st.columns(2)
-            if col_btn1.form_submit_button("✅ Valider les modifs"):
+            c_btn1, c_btn2 = st.columns(2)
+            if c_btn1.form_submit_button("✅ Enregistrer"):
                 c = conn.cursor()
-                c.execute("UPDATE suivi SET note = ?, quantite = ? WHERE id = ?", (new_note, new_q, option))
+                c.execute("UPDATE suivi SET note = ?, quantite = ? WHERE id = ?", (edit_note, edit_q, choice))
                 conn.commit()
-                st.success("Modifié !")
                 st.rerun()
                 
-            if col_btn2.form_submit_button("🗑️ Supprimer cette ligne"):
+            if c_btn2.form_submit_button("🗑️ Supprimer"):
                 c = conn.cursor()
-                c.execute("DELETE FROM suivi WHERE id = ?", (option,))
+                c.execute("DELETE FROM suivi WHERE id = ?", (choice,))
                 conn.commit()
-                st.warning("Supprimé !")
                 st.rerun()
 else:
     st.info("Aucune donnée enregistrée.")
