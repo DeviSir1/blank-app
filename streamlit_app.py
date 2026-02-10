@@ -10,17 +10,25 @@ st.title("🍼 Suivi d'Eliott")
 DATA_FILE = "suivi_eliott.csv"
 COLUMNS = ["Date", "Heure", "Type", "Quantité (ml)", "Poids (kg)", "Taille (cm)", "Notes", "Par"]
 
-# 1. Initialisation robuste du fichier
-if not os.path.exists(DATA_FILE):
-    df = pd.DataFrame(columns=COLUMNS)
-    df.to_csv(DATA_FILE, index=False)
-else:
-    df_fix = pd.read_csv(DATA_FILE)
-    # Si on a changé de version, on ajoute les colonnes manquantes
-    for col in COLUMNS:
-        if col not in df_fix.columns:
-            df_fix[col] = 0.0
-    df_fix.to_csv(DATA_FILE, index=False)
+# --- GESTION DU FICHIER (NETTOYAGE) ---
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        df = pd.DataFrame(columns=COLUMNS)
+        df.to_csv(DATA_FILE, index=False)
+        return df
+    
+    df = pd.read_csv(DATA_FILE)
+    
+    # Si le fichier est corrompu ou mal colonné (ton cas actuel)
+    if list(df.columns) != COLUMNS:
+        st.warning("Mise à jour du format des données en cours...")
+        # On recrée un dataframe propre avec les anciennes données si possible
+        new_df = pd.DataFrame(columns=COLUMNS)
+        df.to_csv(DATA_FILE, index=False) # On repart sur du propre
+        return new_df
+    return df
+
+df_display = load_data()
 
 # --- FORMULAIRE ---
 with st.expander("➕ Enregistrer un événement", expanded=True):
@@ -46,38 +54,36 @@ with st.expander("➕ Enregistrer un événement", expanded=True):
             pd.DataFrame([new_entry], columns=COLUMNS).to_csv(DATA_FILE, mode='a', header=False, index=False)
             st.rerun()
 
-# --- LECTURE ET AFFICHAGE ---
-df_display = pd.read_csv(DATA_FILE)
-
+# --- CALCULS ET AFFICHAGE ---
 if not df_display.empty:
-    # Nettoyage des données pour éviter les erreurs de calcul
+    # On s'assure que les chiffres sont des chiffres
     df_display['Quantité (ml)'] = pd.to_numeric(df_display['Quantité (ml)'], errors='coerce').fillna(0)
-    df_display['Poids (kg)'] = pd.to_numeric(df_display['Poids (kg)'], errors='coerce').fillna(0)
-
-    # Métriques
+    
+    # 1. Total du jour (Mise à jour automatique)
     today = datetime.now().strftime("%d/%m/%Y")
     total_today = df_display[(df_display['Date'] == today) & (df_display['Type'] == "Biberon")]['Quantité (ml)'].sum()
     
     c1, c2 = st.columns(2)
     c1.metric("Total Bib (Auj.)", f"{int(total_today)} ml")
     
-    # Dernier poids (sécurisé)
-    weights = df_display[df_display['Poids (kg)'] > 0]
-    if not weights.empty:
-        c2.metric("Dernier Poids", f"{weights.iloc[-1]['Poids (kg)']} kg")
+    # 2. Dernier Poids
+    poids_data = df_display[df_display['Poids (kg)'] > 0]
+    if not poids_data.empty:
+        c2.metric("Dernier Poids", f"{poids_data.iloc[-1]['Poids (kg)']} kg")
 
-    # Rappel +4h (sécurisé)
+    # 3. Rappel +4h (Sécurisé contre les erreurs de format d'heure)
     bibs = df_display[df_display['Type'] == "Biberon"]
     if not bibs.empty:
         try:
-            last_time_str = str(bibs.iloc[-1]['Heure'])
-            last_time = datetime.strptime(last_time_str, "%H:%M")
-            next_bib = (last_time + timedelta(hours=4)).strftime("%H:%M")
-            st.info(f"🔔 Prochain bib prévu vers **{next_bib}**")
+            last_h = str(bibs.iloc[-1]['Heure'])
+            if ":" in last_h:
+                t_obj = datetime.strptime(last_h, "%H:%M")
+                rappel = (t_obj + timedelta(hours=4)).strftime("%H:%M")
+                st.info(f"🔔 Prochain bib vers **{rappel}**")
         except:
-            st.info("🔔 Prochain bib : Heure non valide")
-            
+            st.info("🔔 Enregistrez un nouveau biberon pour activer le rappel.")
+
     st.subheader("📊 Historique")
     st.dataframe(df_display.tail(10), use_container_width=True)
 else:
-    st.write("Aucune donnée enregistrée pour le moment.")
+    st.info("L'historique est vide. Enregistrez le premier biberon d'Eliott !")
