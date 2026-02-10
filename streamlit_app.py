@@ -8,14 +8,22 @@ st.set_page_config(page_title="Eliott Tracker", page_icon="🍼")
 st.title("🍼 Suivi d'Eliott")
 
 DATA_FILE = "suivi_eliott.csv"
+COLUMNS = ["Date", "Heure", "Type", "Quantité (ml)", "Poids (kg)", "Taille (cm)", "Notes", "Par"]
 
-# Initialisation du fichier avec les nouvelles colonnes Poids et Taille
+# Initialisation ou mise à jour du fichier CSV
 if not os.path.exists(DATA_FILE):
-    df = pd.DataFrame(columns=["Date", "Heure", "Type", "Quantité (ml)", "Poids (kg)", "Taille (cm)", "Notes", "Par"])
+    df = pd.DataFrame(columns=COLUMNS)
     df.to_csv(DATA_FILE, index=False)
+else:
+    # Vérification que toutes les colonnes existent (sécurité anti-crash)
+    df_check = pd.read_csv(DATA_FILE)
+    for col in COLUMNS:
+        if col not in df_check.columns:
+            df_check[col] = 0
+    df_check.to_csv(DATA_FILE, index=False)
 
 # --- FORMULAIRE DE SAISIE ---
-with st.expander("➕ Enregistrer une mesure ou un événement", expanded=True):
+with st.expander("➕ Enregistrer un événement", expanded=True):
     with st.form("entry_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -25,9 +33,7 @@ with st.expander("➕ Enregistrer une mesure ou un événement", expanded=True):
         
         type_event = st.selectbox("Type", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"])
         
-        quantite = 0
-        poids = 0.0
-        taille = 0.0
+        quantite, poids, taille = 0, 0.0, 0.0
         
         if type_event == "Biberon":
             quantite = st.number_input("Quantité (ml)", min_value=0, step=10, value=150)
@@ -38,41 +44,37 @@ with st.expander("➕ Enregistrer une mesure ou un événement", expanded=True):
         note = st.text_input("Commentaire / Note")
         auteur = st.radio("Qui note ?", ["Papa", "Maman"], horizontal=True)
         
-        submitted = st.form_submit_button("Enregistrer")
-        
-        if submitted:
-            date_str = date_ev.strftime("%d/%m/%Y")
-            heure_str = heure_ev.strftime("%H:%M")
-            
-            new_data = pd.DataFrame([[date_str, heure_str, type_event, quantite, poids, taille, note, auteur]], 
-                                    columns=["Date", "Heure", "Type", "Quantité (ml)", "Poids (kg)", "Taille (cm)", "Notes", "Par"])
-            new_data.to_csv(DATA_FILE, mode='a', header=False, index=False)
-            st.success(f"Données enregistrées !")
+        if st.form_submit_button("Enregistrer"):
+            new_entry = [date_ev.strftime("%d/%m/%Y"), heure_ev.strftime("%H:%M"), type_event, quantite, poids, taille, note, auteur]
+            new_df = pd.DataFrame([new_entry], columns=COLUMNS)
+            new_df.to_csv(DATA_FILE, mode='a', header=False, index=False)
+            st.rerun() # Force le rafraîchissement des calculs
 
-# --- CALCUL DU TOTAL (Correction de la mise à jour) ---
-# On recharge les données à chaque passage pour garantir la mise à jour
+# --- AFFICHAGE ET CALCULS ---
 df_display = pd.read_csv(DATA_FILE)
 
-# Calcul dynamique pour aujourd'hui
+# On s'assure que les types sont corrects pour les calculs
+df_display['Quantité (ml)'] = pd.to_numeric(df_display['Quantité (ml)'], errors='coerce').fillna(0)
+df_display['Poids (kg)'] = pd.to_numeric(df_display['Poids (kg)'], errors='coerce').fillna(0)
+
+# Métriques
 today_str = datetime.now().strftime("%d/%m/%Y")
 total_bib_today = df_display[(df_display['Date'] == today_str) & (df_display['Type'] == "Biberon")]['Quantité (ml)'].sum()
 
-# --- AFFICHAGE DES MÉTRIQUES ---
 c1, c2 = st.columns(2)
-with c1:
-    st.metric("Total Biberons (Auj.)", f"{total_bib_today} ml")
-with c2:
-    # Affiche le dernier poids enregistré
-    last_weight = df_display[df_display['Poids (kg)'] > 0]['Poids (kg)'].last_valid_index()
-    if last_weight is not None:
-        st.metric("Dernier Poids", f"{df_display.loc[last_weight, 'Poids (kg)']} kg")
+c1.metric("Total Bib (Auj.)", f"{int(total_bib_today)} ml")
 
-# Rappel automatique affiché à l'écran
-last_bib = df_display[df_display['Type'] == "Biberon"].tail(1)
-if not last_bib.empty:
-    h_bib = datetime.strptime(last_bib['Heure'].values[0], "%H:%M")
-    rappel = (h_bib + timedelta(hours=4)).strftime("%H:%M")
-    st.info(f"🔔 Prochain biberon conseillé vers : **{rappel}**")
+# Récupérer le dernier poids non nul
+weights = df_display[df_display['Poids (kg)'] > 0]
+if not weights.empty:
+    c2.metric("Dernier Poids", f"{weights.iloc[-1]['Poids (kg)']} kg")
+
+# Rappel +4h
+bibs = df_display[df_display['Type'] == "Biberon"]
+if not bibs.empty:
+    last_time = datetime.strptime(bibs.iloc[-1]['Heure'], "%H:%M")
+    next_bib = (last_time + timedelta(hours=4)).strftime("%H:%M")
+    st.info(f"🔔 Prochain bib vers **{next_bib}**")
 
 st.subheader("📊 Historique")
-st.dataframe(df_display.tail(10), use_container_width=True)
+st.dataframe(df_display.tail(15), use_container_width=True)
