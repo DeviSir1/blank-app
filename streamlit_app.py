@@ -4,14 +4,14 @@ from datetime import datetime, timedelta
 import sqlite3
 import os
 
-# Config de la page
+# Configuration
 st.set_page_config(page_title="Eliott App", page_icon="🍼")
 
-# --- INITIALISATION BDD SÉCURISÉE ---
+# --- INITIALISATION BDD (NOM CHANGÉ POUR RESET) ---
 def init_db():
-    conn = sqlite3.connect('eliott_data.db', check_same_thread=False)
+    # On change le nom ici pour forcer la création d'une base neuve et propre
+    conn = sqlite3.connect('eliott_v3.db', check_same_thread=False)
     c = conn.cursor()
-    # Création propre de la table
     c.execute('''CREATE TABLE IF NOT EXISTS suivi 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   date TEXT, heure TEXT, type TEXT, 
@@ -29,10 +29,10 @@ if datetime.now().strftime("%d/%m") == "11/02":
 
 st.title("🍼 Suivi d'Eliott")
 
-# --- FORMULAIRE DYNAMIQUE (VRAIMENT RÉACTIF) ---
+# --- FORMULAIRE DYNAMIQUE ---
 with st.expander("➕ Noter un événement", expanded=True):
-    # On utilise une clé pour forcer le rafraîchissement
-    type_ev = st.selectbox("Type d'événement", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"], key="main_type")
+    # Choix du type en dehors pour que l'interface réagisse au clic
+    type_ev = st.selectbox("Type d'événement", ["Biberon", "Pipi", "Caca", "Poids/Taille", "Note"], key="select_type")
     
     with st.form("form_saisie", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -41,7 +41,7 @@ with st.expander("➕ Noter un événement", expanded=True):
         
         q, p, ta = 0.0, 0.0, 0.0
         
-        # Affichage conditionnel strict
+        # Affichage intelligent : les ML disparaissent pour Pipi/Caca
         if type_ev == "Biberon":
             q = st.number_input("Quantité de lait (ml)", min_value=0.0, step=10.0, value=150.0)
         elif type_ev == "Poids/Taille":
@@ -59,7 +59,7 @@ with st.expander("➕ Noter un événement", expanded=True):
             conn.commit()
             st.rerun()
 
-# --- RÉCUPÉRATION ET AFFICHAGE ---
+# --- LECTURE ET AFFICHAGE ---
 try:
     df = pd.read_sql_query("SELECT * FROM suivi", conn)
 except:
@@ -72,23 +72,20 @@ if not df.empty:
     st.subheader(f"📊 État du jour : {int(total_today)} ml")
     st.progress(min(total_today / 900.0, 1.0))
     
-    # Prochain bib
+    # Rappel prochain bib
     bibs = df[df['type'] == "Biberon"]
     if not bibs.empty:
         try:
             last_h = datetime.strptime(str(bibs.iloc[-1]['heure']), "%H:%M")
             next_h = (last_h + timedelta(hours=4)).strftime("%H:%M")
             st.warning(f"🔔 Prochain bib prévu vers : **{next_h}**")
-        except:
-            st.warning("🔔 Prochain bib : Heure à définir")
+        except: pass
 
     st.subheader("📝 Historique")
-    # On ne montre que les colonnes qui parlent à l'utilisateur
-    cols_to_show = ['date', 'heure', 'type', 'quantite', 'note', 'auteur']
-    st.dataframe(df.iloc[::-1].head(10)[cols_to_show], use_container_width=True)
+    st.dataframe(df.iloc[::-1].head(10)[['date', 'heure', 'type', 'quantite', 'note', 'auteur']], use_container_width=True)
 
-    # --- MODIF / SUPPR ---
-    with st.expander("✏️ Modifier ou Supprimer"):
+    # --- MODIF / SUPPR (SÉCURISÉ) ---
+    with st.expander("✏️ Modifier ou Supprimer une ligne"):
         df_edit = df.copy()
         df_edit['label'] = df_edit['date'] + " " + df_edit['heure'] + " - " + df_edit['type']
         
@@ -98,7 +95,7 @@ if not df.empty:
         row = df[df['id'] == choice].iloc[0]
         with st.form("edit_form"):
             new_n = st.text_input("Note", value=row['note'])
-            new_q = st.number_input("Quantité", value=float(row['quantite'])) if row['type']=="Biberon" else row['quantite']
+            new_q = st.number_input("Quantité (ml)", value=float(row['quantite'])) if row['type']=="Biberon" else row['quantite']
             
             c1, c2 = st.columns(2)
             if c1.form_submit_button("✅ Valider"):
@@ -112,4 +109,4 @@ if not df.empty:
                 conn.commit()
                 st.rerun()
 else:
-    st.info("L'historique est vide. Enregistrez le premier biberon d'Eliott !")
+    st.info("Historique vide. Prêt pour le premier bib d'Eliott !")
